@@ -1,0 +1,12 @@
+__pycache__
+*.pyc
+assets/
+images*/
+save/
+venv/
+logs/
+*.db
+CLAUDE.md
+*.sh
+videos/*
+*.log

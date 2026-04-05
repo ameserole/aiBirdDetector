@@ -1,145 +1,161 @@
 # Bird Detection and Classification Pipeline
 
-A Python system for detecting and identifying bird species in video files and RTSP streams using deep learning models.
+A Python system for detecting and identifying bird species in video files using deep learning. Detected species are recorded in a SQLite database keyed to the source video; a web UI lets you browse results and play back videos in-browser.
 
-## Overview
+> **Disclaimer**: Prototyped by hand but "productized" with AI.
 
-**Disclaimer**: Prototyped by hand but "productized" with AI.
+## How it works
 
-This project combines two models:
-- **YOLO (You Only Look Once)**: For generic bird detection in video frames
-- **Your Choice of TFLite Bird ID Model**: For bird species classification
+Two models run in sequence on each video frame:
 
-The pipeline processes video frames, detects birds, crops the detected regions, and classifies them into specific species using the provided bird ID model.
+1. **Detection** — YOLO (YOLO backend) or Hailo-8 NPU via GStreamer (Hailo backend) finds bounding boxes labelled `bird`.
+2. **Classification** — A TFLite bird-ID model identifies the species from the cropped region.
 
-## Features
-
-
+When a video finishes processing, any species that crossed the confidence threshold are written to `birds.db` alongside the path to the source video file. No images are extracted; the original video is the record.
 
 ## Installation
 
-### Prerequisites
-- Python 3.8+
-- CUDA 11.x (optional, for GPU acceleration)
-
-### Setup
-
 ```bash
-# Navigate to project directory
-cd /home/messy/myBirdCamera
-
-# Create virtual environment
-python3 -m venv env
-source env/bin/activate
-
-# Install dependencies
-pip install --upgrade pip
-pip install opencv-python tensorflow ultralytics pillow numpy
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+# installs: opencv-python-headless, ultralytics, tensorflow, flask
 ```
+
+### Required assets
+
+Place these in `assets/` before running:
+
+| File | Used by | Purpose |
+|------|---------|---------|
+| `yolo26n.pt` | YOLO backend | Bird detection model |
+| `model.tflite` | Both backends | Species classification model |
+| `labels.txt` | Both backends | One species label per line, matching model output indices |
+
+An optional species ignore list (one name per line) can be passed via `--bird-ignore-list`.
 
 ## Usage
 
 ```bash
-python3 ./aiBirdDetector.py --help
-usage: aiBirdDetector.py [-h] [--video VIDEO] [--rtsp RTSP] [--display] [--output OUTPUT] [--confidence CONFIDENCE]
-                         [--frame-skip FRAME_SKIP] [--yolo-model YOLO_MODEL] [--bird-model BIRD_MODEL]
-                         [--bird-labels BIRD_LABELS] [--bird-ignore-list BIRD_IGNORE_LIST] [--output-dir OUTPUT_DIR]
-
-Bird Detection and Classification Pipeline
-
-options:
-  -h, --help            show this help message and exit
-  --video VIDEO         Path to video file
-  --rtsp RTSP           RTSP stream URL
-  --display             Display video while processing
-  --output OUTPUT       Path to save output video
-  --confidence CONFIDENCE
-                        Detection confidence threshold (0-1)
-  --frame-skip FRAME_SKIP
-                        Process every Nth frame
-  --yolo-model YOLO_MODEL
-                        YOLO model path
-  --bird-model BIRD_MODEL
-                        Bird ID model path
-  --bird-labels BIRD_LABELS
-                        Bird ID labels path
-  --bird-ignore-list BIRD_IGNORE_LIST
-                        Path to bird species ignore list
-  --output-dir OUTPUT_DIR
-                        Directory to save detected birds
-
-Examples:
-  # Process local video file
-  python myBirdCameraDetect.py --video bird-detect-1/source/birds.mp4
-  
-  # Process RTSP stream with display
-  python myBirdCameraDetect.py --rtsp rtsp://127.0.0.1:8554/stream1 --display
-  
-  # Save output video
-  python myBirdCameraDetect.py --video input.mp4 --output output.mp4 --frame-skip 0
-        
+source venv/bin/activate
 ```
 
-### Basic Examples
+### YOLO backend
 
-#### Process a local video file
 ```bash
-python myBirdCameraDetect.py --video ./birds.mp4
+# Single video file
+python aiBirdDetector.py --backend yolo --video birds.mp4
+
+# Batch-process a directory of MP4s, copying positives to ./videos/
+python aiBirdDetector.py --backend yolo --video-dir /path/to/videos/ --output-dir ./videos/
+
+# RTSP stream (detections logged to console; no DB entry for live streams)
+python aiBirdDetector.py --backend yolo --rtsp rtsp://127.0.0.1:8554/stream1 --display
+
+# Tune thresholds
+python aiBirdDetector.py --backend yolo --video birds.mp4 \
+  --confidence 0.7 --classification-confidence 0.85 --frame-skip 15
 ```
 
-#### Process RTSP stream with display
+### Hailo backend
+
+Uses a Hailo-8 NPU via GStreamer. Hailo-specific flags (`-i`, `--height`, `--width`, `--frame-rate`) pass through directly to `GStreamerDetectionApp`.
+
 ```bash
-python myBirdCameraDetect.py --rtsp rtsp://127.0.0.1:8554/stream1 --display
+# Via convenience script (watches for new files with inotifywait)
+bash run_pipeline.sh
+
+# Directly — single video file at 4K, 1 fps, copying positives to ./videos/
+python aiBirdDetector.py --backend hailo -i /path/to/birds.mp4 \
+  --height 2160 --width 3840 --frame-rate 1 --output-dir ./videos/
 ```
 
-#### Save output video with annotations
+### Key shared options
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--db` | `birds.db` | SQLite database path |
+| `--classification-confidence` | 0.9 (YOLO) / 0.5 (Hailo) | Species confidence threshold |
+| `--bird-model` | `assets/model.tflite` | TFLite classification model |
+| `--bird-labels` | `assets/labels.txt` | Species labels file |
+| `--bird-ignore-list` | — | Species to skip (YOLO only) |
+| `--output-dir` | — | Directory to copy bird-positive videos into |
+
+### Automated file watcher
+
+`run_pipeline.sh` watches a directory for newly written MP4 files using `inotifywait` and runs the Hailo pipeline on each one automatically. Bird-positive videos are copied to `./videos/` and the originals are deleted. Edit `VIDEOS_DIR` at the top of the script to point at your incoming video folder.
+
 ```bash
-python myBirdCameraDetect.py --video input.mp4 --output output_annotated.mp4 --frame-skip 0
+# Requires: sudo apt install inotify-tools
+bash run_pipeline.sh
 ```
 
-#### Adjust detection sensitivity
+## Web viewer
+
+A Flask app for browsing results. Each row in the table represents a video file; species detected in it are shown as chips. Click **Play** to stream the video inline.
+
 ```bash
-python myBirdCameraDetect.py --video input.mp4 --confidence 0.7 --display
+python viewer/birdViewer.py --db birds.db --port 5000
+# then open http://localhost:5000
 ```
 
-#### Process every 15th frame for faster processing
-```bash
-python myBirdCameraDetect.py --rtsp rtsp://192.168.0.23:8554/stream --frame-skip 15
-```
+API endpoints (JSON):
 
-## Output
+- `GET /api/summary` — species counts across all videos
+- `GET /api/videos?species=&date=&page=` — paginated video list with species
+- `GET /videos/<id>` — streams the source video file
 
-### Detected Bird Images
-Saved to `images/` directory with timestamp:
-```
-images/
-├── bird_2026-01-28_14-32-15-123456.jpg
-├── bird_2026-01-28_14-32-45-234567.jpg
-└── ...
-```
+## Database schema
 
-## RTSP Stream Setup
+`birds.db` (SQLite) has two tables:
 
-### Raspberry Pi Camera to RTSP
+**`videos`** — one row per processed video file
 
-**On Raspberry Pi** (camera source):
+| column | type | notes |
+|--------|------|-------|
+| `id` | INTEGER | primary key |
+| `filepath` | TEXT | absolute path to source video |
+| `recorded_at` | TEXT | ISO 8601, when processing started |
+| `backend` | TEXT | `'yolo'` or `'hailo'` |
+
+**`detections`** — one row per species found in a video
+
+| column | type | notes |
+|--------|------|-------|
+| `id` | INTEGER | primary key |
+| `video_id` | INTEGER | FK → `videos.id` |
+| `timestamp` | TEXT | ISO 8601, time of first detection |
+| `species` | TEXT | |
+| `species_confidence` | REAL | classification model confidence (0–1) |
+| `detection_confidence` | REAL | YOLO box confidence; NULL for Hailo |
+
+## RTSP stream setup (Raspberry Pi camera)
+
+**On the Raspberry Pi** (camera source):
 ```bash
 rpicam-vid -t 0 -n --codec libav --libav-format mpegts -o tcp://192.168.0.23:4444
 ```
 
-**On Linux Server** (stream relay):
+**On the Linux server** (relay to RTSP):
 ```bash
 socat TCP4-LISTEN:4444,fork STDOUT | cvlc stream:///dev/stdin \
   --sout '#rtp{sdp=rtsp://:8554/stream1}' --rtsp-host=127.0.0.1
 ```
 
-**Process stream**:
+## Testing individual components
+
 ```bash
-python myBirdCameraDetect.py --rtsp rtsp://127.0.0.1:8554/stream1 --display
+# Test species classification on a single image
+python birdIdModel.py <image_path>
+
+# Test raw Hailo hardware inference
+python hailoSimple.py
+
+# Smoke-test the database layer
+python birdDatabase.py
 ```
 
 ## License
 
-This project uses:
-- YOLOv8 (Ultralytics) - AGPL-3.0
-- TensorFlow - Apache 2.0
+- YOLOv8 (Ultralytics) — AGPL-3.0
+- TensorFlow — Apache 2.0

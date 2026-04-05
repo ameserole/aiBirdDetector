@@ -1,0 +1,304 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Bird Sightings</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: system-ui, -apple-system, sans-serif; background: #f0f4f0; color: #222; }
+
+    header {
+      background: #2a5c24; color: #fff;
+      padding: 0.9rem 1.5rem;
+      display: flex; align-items: center; justify-content: space-between;
+    }
+    header h1 { font-size: 1.2rem; font-weight: 600; }
+    #last-updated { font-size: 0.78rem; opacity: 0.75; }
+
+    main { max-width: 1100px; margin: 1.5rem auto; padding: 0 1rem; }
+
+    .card {
+      background: #fff; border-radius: 8px;
+      box-shadow: 0 1px 4px rgba(0,0,0,.08);
+      padding: 1.25rem 1.5rem; margin-bottom: 1.25rem;
+    }
+    .card-title {
+      font-size: 0.72rem; font-weight: 700;
+      text-transform: uppercase; letter-spacing: .06em;
+      color: #666; margin-bottom: 1rem;
+    }
+
+    #chart-wrap { position: relative; }
+
+    .filters { display: flex; gap: 1rem; align-items: flex-end; flex-wrap: wrap; }
+    .filter-group { display: flex; flex-direction: column; gap: 0.3rem; }
+    .filter-group label { font-size: 0.8rem; color: #555; font-weight: 500; }
+    .filter-group select,
+    .filter-group input[type="date"] {
+      padding: 0.35rem 0.6rem; border: 1px solid #ccc;
+      border-radius: 5px; font-size: 0.88rem; background: #fff;
+    }
+    .btn { padding: 0.38rem 1rem; border: none; border-radius: 5px; font-size: 0.88rem; cursor: pointer; font-weight: 500; }
+    .btn-primary  { background: #2a5c24; color: #fff; }
+    .btn-primary:hover  { background: #367a2e; }
+    .btn-secondary { background: #e0e0e0; color: #444; }
+    .btn-secondary:hover { background: #ccc; }
+    .btn-play {
+      background: #2a5c24; color: #fff; border: none;
+      border-radius: 4px; padding: 0.25rem 0.65rem;
+      font-size: 0.8rem; cursor: pointer; white-space: nowrap;
+    }
+    .btn-play:hover { background: #367a2e; }
+
+    #record-count { font-size: 0.83rem; color: #777; margin-bottom: 0.75rem; }
+    table { width: 100%; border-collapse: collapse; font-size: 0.875rem; }
+    thead th {
+      text-align: left; padding: 0.5rem 0.75rem;
+      border-bottom: 2px solid #e8e8e8;
+      font-weight: 600; color: #555; font-size: 0.78rem; white-space: nowrap;
+    }
+    tbody td { padding: 0.45rem 0.75rem; border-bottom: 1px solid #f2f2f2; vertical-align: middle; }
+    tbody tr:last-child td { border-bottom: none; }
+    tbody tr:hover td { background: #fafcfa; }
+
+    .filename { font-weight: 600; font-size: 0.85rem; word-break: break-all; }
+    .species-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; }
+    .chip {
+      display: inline-block; padding: 0.15rem 0.5rem;
+      background: #e8f5e9; color: #2a5c24;
+      border-radius: 999px; font-size: 0.72rem; font-weight: 600;
+    }
+    .badge {
+      display: inline-block; padding: 0.15rem 0.55rem;
+      border-radius: 999px; font-size: 0.7rem;
+      font-weight: 700; text-transform: uppercase; letter-spacing: .04em;
+    }
+    .badge-yolo  { background: #dbeafe; color: #1e40af; }
+    .badge-hailo { background: #dcfce7; color: #166534; }
+
+    .pagination {
+      display: flex; align-items: center;
+      justify-content: center; gap: 0.6rem; margin-top: 1.1rem;
+    }
+    .pagination .btn { padding: 0.3rem 0.8rem; }
+    .page-info { font-size: 0.82rem; color: #666; min-width: 110px; text-align: center; }
+
+    /* Video lightbox */
+    #lightbox {
+      display: none; position: fixed; inset: 0;
+      background: rgba(0,0,0,.88); z-index: 200;
+      align-items: center; justify-content: center;
+      flex-direction: column; gap: 0.75rem;
+    }
+    #lightbox.open { display: flex; }
+    #lb-video {
+      max-width: 92vw; max-height: 82vh;
+      border-radius: 5px; box-shadow: 0 4px 32px rgba(0,0,0,.5);
+      background: #000;
+    }
+    #lb-title {
+      color: #fff; font-size: 0.9rem; opacity: 0.85;
+      max-width: 92vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    }
+    #lb-close {
+      position: fixed; top: 1rem; right: 1.5rem;
+      color: #fff; font-size: 2rem; cursor: pointer; opacity: .85; line-height: 1;
+    }
+    #lb-close:hover { opacity: 1; }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>Bird Sightings</h1>
+  <span id="last-updated"></span>
+</header>
+
+<main>
+  <div class="card">
+    <div class="card-title">Species Summary</div>
+    <div id="chart-wrap"><canvas id="chart"></canvas></div>
+  </div>
+
+  <div class="card">
+    <div class="card-title">Filter</div>
+    <div class="filters">
+      <div class="filter-group">
+        <label for="sel-species">Species</label>
+        <select id="sel-species"><option value="">All species</option></select>
+      </div>
+      <div class="filter-group">
+        <label for="inp-date">Date</label>
+        <input type="date" id="inp-date">
+      </div>
+      <button class="btn btn-primary" onclick="applyFilters()">Apply</button>
+      <button class="btn btn-secondary" onclick="clearFilters()">Clear</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div id="record-count"></div>
+    <table>
+      <thead>
+        <tr>
+          <th>Date / Time</th>
+          <th>File</th>
+          <th>Species</th>
+          <th>Backend</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="tbody"></tbody>
+    </table>
+    <div class="pagination">
+      <button class="btn btn-secondary" id="btn-prev" onclick="changePage(-1)">&#8592; Prev</button>
+      <span class="page-info" id="page-info"></span>
+      <button class="btn btn-secondary" id="btn-next" onclick="changePage(1)">Next &#8594;</button>
+    </div>
+  </div>
+</main>
+
+<div id="lightbox" onclick="closeLb(event)">
+  <span id="lb-close" onclick="closeLb(event)">&times;</span>
+  <video id="lb-video" controls></video>
+  <div id="lb-title"></div>
+</div>
+
+<script>
+  const state = { page: 1, species: '', date: '', totalPages: 1 };
+  let chart = null;
+
+  async function fetchSummary() {
+    const res  = await fetch('/api/summary');
+    const data = await res.json();
+    renderChart(data);
+
+    const sel  = document.getElementById('sel-species');
+    const prev = sel.value;
+    sel.innerHTML = '<option value="">All species</option>';
+    data.forEach(d => {
+      const o = document.createElement('option');
+      o.value = d.species;
+      o.textContent = d.species + ' (' + d.count + ')';
+      if (d.species === prev) o.selected = true;
+      sel.appendChild(o);
+    });
+  }
+
+  function renderChart(data) {
+    if (typeof Chart === 'undefined') return;
+    const labels = data.map(d => d.species);
+    const counts = data.map(d => d.count);
+    if (chart) chart.destroy();
+    const wrap = document.getElementById('chart-wrap');
+    wrap.style.height = Math.max(100, labels.length * 30) + 'px';
+    chart = new Chart(document.getElementById('chart'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [{ label: 'Sightings', data: counts, backgroundColor: '#2a5c24cc', borderRadius: 4 }]
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: { x: { ticks: { precision: 0 }, beginAtZero: true } }
+      }
+    });
+  }
+
+  async function fetchVideos() {
+    const p = new URLSearchParams({ page: state.page });
+    if (state.species) p.set('species', state.species);
+    if (state.date)    p.set('date',    state.date);
+    const res  = await fetch('/api/videos?' + p);
+    const data = await res.json();
+
+    state.totalPages = data.pages;
+    document.getElementById('record-count').textContent =
+      data.total + ' video' + (data.total !== 1 ? 's' : '');
+    document.getElementById('page-info').textContent =
+      'Page ' + data.page + ' of ' + data.pages;
+    document.getElementById('btn-prev').disabled = data.page <= 1;
+    document.getElementById('btn-next').disabled = data.page >= data.pages;
+
+    const tbody = document.getElementById('tbody');
+    tbody.innerHTML = '';
+    data.rows.forEach(row => {
+      const tr = document.createElement('tr');
+      const ts = new Date(row.recorded_at).toLocaleString();
+      const badge = '<span class="badge badge-' + row.backend + '">' + row.backend + '</span>';
+      const chips = row.species.map(s =>
+        '<span class="chip">' + s + '</span>'
+      ).join('');
+
+      tr.innerHTML =
+        '<td>' + ts + '</td>' +
+        '<td class="filename">' + row.filename + '</td>' +
+        '<td><div class="species-chips">' + chips + '</div></td>' +
+        '<td>' + badge + '</td>' +
+        '<td><button class="btn-play">&#9654; Play</button></td>';
+      tr.querySelector('.btn-play').addEventListener('click', function() {
+        openLb(row.video_url, row.filename);
+      });
+      tbody.appendChild(tr);
+    });
+  }
+
+  function applyFilters() {
+    state.species = document.getElementById('sel-species').value;
+    state.date    = document.getElementById('inp-date').value;
+    state.page    = 1;
+    fetchVideos();
+  }
+
+  function clearFilters() {
+    document.getElementById('sel-species').value = '';
+    document.getElementById('inp-date').value    = '';
+    state.species = '';
+    state.date    = '';
+    state.page    = 1;
+    fetchVideos();
+  }
+
+  function changePage(delta) {
+    const next = state.page + delta;
+    if (next < 1 || next > state.totalPages) return;
+    state.page = next;
+    fetchVideos();
+  }
+
+  function openLb(url, filename) {
+    const vid = document.getElementById('lb-video');
+    vid.src = url;
+    vid.load();
+    document.getElementById('lb-title').textContent = filename;
+    document.getElementById('lightbox').classList.add('open');
+  }
+
+  function closeLb(ev) {
+    if (ev && ev.target !== document.getElementById('lightbox') &&
+        ev.target !== document.getElementById('lb-close')) return;
+    const vid = document.getElementById('lb-video');
+    vid.pause();
+    vid.src = '';
+    document.getElementById('lightbox').classList.remove('open');
+  }
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeLb(); });
+
+  async function refresh() {
+    await Promise.allSettled([fetchSummary(), fetchVideos()]);
+    document.getElementById('last-updated').textContent =
+      'Updated ' + new Date().toLocaleTimeString();
+  }
+
+  refresh();
+  setInterval(refresh, 60000);
+</script>
+
+</body>
+</html>
